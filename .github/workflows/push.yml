@@ -34,7 +34,7 @@ jobs:
           overwrite: true
 
   duplicate-release:
-    name: Duplicate Release
+    name: Publish to a public repo
     needs: releases-matrix
     runs-on: ubuntu-latest
     steps:
@@ -47,3 +47,4 @@ jobs:
           tag_name: 'inherit' # Must use 'inherit' to get the latest release
           body: 'Assets' # Will be added in the new release
           repo: 'cortexapps/public-brain-freeze' # The format is like owner/repo
+          asset_files: 'brain-freeze-master-darwin-amd64.tar.gz, brain-freeze-master-linux-amd64.tar.gz, brain-freeze-master-linux-386.tar.gz, brain-freeze-master-linux-arm64.tar.gz' # The files you want to copy
