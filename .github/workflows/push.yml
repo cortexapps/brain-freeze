@@ -32,6 +32,8 @@ jobs:
           binary_name: "brain-freeze"
           extra_files: LICENSE README.md
           overwrite: true
+          md5sum: false
+          release_tag: latest
 
   duplicate-release:
     name: Publish to a public repo
@@ -45,6 +47,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }} # You need a new token to access the target Repository
         with:
           tag_name: 'inherit' # Must use 'inherit' to get the latest release
-          body: 'Assets' # Will be added in the new release
+          body: 'Binaries for the cortex brain-freeze CLI' # Will be added in the new release
           repo: 'cortexapps/public-brain-freeze' # The format is like owner/repo
           asset_files: 'brain-freeze-master-darwin-amd64.tar.gz, brain-freeze-master-linux-amd64.tar.gz, brain-freeze-master-linux-386.tar.gz, brain-freeze-master-linux-arm64.tar.gz' # The files you want to copy
