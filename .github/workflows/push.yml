@@ -6,9 +6,6 @@ permissions:
   contents: write
   packages: write
 
-env
-
-
 jobs:
   releases-matrix:
     name: Release Go Binary
