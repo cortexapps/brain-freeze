@@ -32,3 +32,18 @@ jobs:
           binary_name: "brain-freeze"
           extra_files: LICENSE README.md
           overwrite: true
+
+  duplicate-release:
+    name: Duplicate Release
+    needs: releases-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Duplicate Release With Asset to a public repo
+        id: Release-AIO
+        uses: Hs1r1us/Release-AIO@v2.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # You need a new token to access the target Repository
+        with:
+          tag_name: 'inherit' # Must use 'inherit' to get the latest release
+          body: 'Assets' # Will be added in the new release
+          repo: 'cortexapps/public-brain-freeze' # The format is like owner/repo
