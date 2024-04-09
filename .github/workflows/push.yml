@@ -30,3 +30,4 @@ jobs:
           project_path: "./"
           binary_name: "brain-freeze"
           extra_files: LICENSE README.md
+          overwrite: true
