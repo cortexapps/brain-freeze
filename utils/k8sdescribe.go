@@ -1,3 +1,8 @@
+/*
+	This file is primarily taken from https://github.com/kubernetes/kubectl/blob/master/pkg/describe/describe.go
+	We had to make some custom edits to fit our needs
+*/
+
 package utils
 
 import (

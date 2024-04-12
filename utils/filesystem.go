@@ -2,6 +2,7 @@ package utils
 
 import "os"
 
+// TODO Refactor this and break into smaller functions
 func WriteToFile(fileName string, data string) {
 	logger := GetLogger()
 	logger.Info().Msg("Creating file: " + fileName)
