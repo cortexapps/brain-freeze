@@ -30,8 +30,8 @@ func init() {
 	rootCmd.AddCommand(backendCmd)
 	backendCmd.AddCommand(infoCommand)
 
-	backendCmd.PersistentFlags().String("url", "http://app.helm.getcortexapp.com", "(required) absolute path to the kubeconfig file")
-	backendCmd.PersistentFlags().String("token", "", "(required) absolute path to the kubeconfig file")
+	backendCmd.PersistentFlags().String("url", "", "(required) absolute path to the kubeconfig file")
+	backendCmd.PersistentFlags().String("token", "", "(required) The PAT to authenticate with the Cortex backend")
 }
 
 func runInfoCmd(url string, token string) {
