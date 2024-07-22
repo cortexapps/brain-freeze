@@ -2,8 +2,6 @@ name: Publish Assets
 
 on:
   push:
-    branches:
-      - master
   workflow_dispatch:
 
 permissions:
@@ -39,4 +37,5 @@ jobs:
           overwrite: true
           md5sum: false
           release_tag: latest
+          release_name: "Latest Binaries"
           release_repo: cortexapps/brain-freeze
