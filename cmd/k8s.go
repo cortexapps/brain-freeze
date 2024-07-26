@@ -75,8 +75,9 @@ func runDumpCommand(kubeconfig string, namespace string, helmDeployment string) 
 	logger.Info().Msg("helmDeployment is : " + helmDeployment)
 
 	clientset := getClientSet(kubeconfig)
-
-	helmClient, err := helmclient.New(&helmclient.Options{})
+	helmClient, err := helmclient.New(&helmclient.Options{
+		Namespace: namespace,
+	})
 	if err != nil {
 		logger.Error().Msg("Error while creating helm client: " + err.Error())
 	}
