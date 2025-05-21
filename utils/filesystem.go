@@ -2,24 +2,24 @@ package utils
 
 import "os"
 
-// TODO Refactor this and break into smaller functions
 func CreateDirectory(path string) {
 	logger := GetLogger()
 	err := os.MkdirAll(path, 0700)
 	if err != nil {
-		logger.Error().Msg("Error while creating directory: " + err.Error())
+		logger.Fatal().Err(err).Msg("Error while creating directory")
 	}
 }
+
 func WriteToFile(fileName string, data string) {
 	logger := GetLogger()
-	logger.Info().Msg("Creating file: " + fileName)
+	logger.Info().Msgf("Creating file %s", fileName)
 	out, e := os.Create(fileName)
 	if e != nil {
-		logger.Error().Msg("Error while creating file: " + e.Error())
+		logger.Fatal().Err(e).Msgf("Error creating file %s", fileName)
 	}
 
 	_, err := out.WriteString(data + "\n")
 	if err != nil {
-		logger.Error().Msg("Error while writing to file: " + err.Error())
+		logger.Fatal().Err(err).Msgf("Error writing to file %s", fileName)
 	}
 }
