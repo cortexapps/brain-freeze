@@ -7,7 +7,6 @@ import (
 	"brain-freeze/utils"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	helmclient "github.com/mittwald/go-helm-client"
 	"github.com/spf13/cobra"
@@ -23,6 +22,7 @@ import (
 	"sigs.k8s.io/yaml"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // k8sCmd represents the k8s command
@@ -69,32 +69,7 @@ func init() {
 }
 
 func runDumpCommand(kubeconfig string, namespace string, helmDeployment string) {
-	logger := utils.GetLogger()
-	helmClient, err := helmclient.New(&helmclient.Options{
-		Namespace: namespace,
-	})
-	if err != nil {
-		logger.Error().Err(err).Msg("Error creating helm client")
-	} else {
-		helmRelease, err := helmClient.GetRelease(helmDeployment)
-		if err != nil {
-			logger.Error().Err(err).Msgf("Error fetching helm release %s", helmDeployment)
-		} else {
-			utils.WriteToFile("data/helm/manifest.yaml", helmRelease.Manifest)
-		}
-
-		releaseValues, err := helmClient.GetReleaseValues(helmDeployment, true)
-		if err != nil {
-			logger.Error().Err(err).Msgf("Error getting values for helm release %s", helmDeployment)
-		} else {
-			jsonString, err := json.Marshal(releaseValues)
-			if err != nil {
-				logger.Fatal().Err(err).Msg("Error while marshalling helm release values")
-			} else {
-				utils.WriteToFile("data/helm/values.json", string(jsonString))
-			}
-		}
-	}
+	dumpHelm(namespace, helmDeployment)
 
 	_, dynamicClient := getClients(kubeconfig)
 	dumpDeployments(dynamicClient, namespace)
@@ -125,12 +100,77 @@ func getClients(kubeconfig string) (*kubernetes.Clientset, *dynamic.DynamicClien
 	return clientset, dynamicClient
 }
 
+type HelmChartMetadata struct {
+	Name       string
+	Version    string
+	AppVersion string
+}
+
+type HelmReleaseMetadata struct {
+	Chart        HelmChartMetadata
+	Dependencies []HelmChartMetadata
+	DeployedAt   time.Time
+	Name         string
+	Namespace    string
+	Revision     int
+	Status       string
+}
+
+func dumpHelm(namespace string, releaseName string) {
+	logger := utils.GetLogger().With().Str("helmRelease", releaseName).Str("namespace", namespace).Logger()
+	client, err := helmclient.New(&helmclient.Options{
+		Namespace: namespace,
+	})
+	if err != nil {
+		logger.Error().Err(err).Msg("Error creating helm client")
+	} else {
+		release, err := client.GetRelease(releaseName)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Error fetching helm release %s", releaseName)
+		} else {
+			utils.WriteToFile("data/helm/manifest.yaml", release.Manifest)
+
+			meta := HelmReleaseMetadata{
+				Name:       release.Name,
+				Namespace:  release.Namespace,
+				Revision:   release.Version,
+				Status:     release.Info.Status.String(),
+				DeployedAt: release.Info.LastDeployed.Time,
+				Chart: HelmChartMetadata{
+					Name:       release.Chart.Name(),
+					Version:    release.Chart.Metadata.Version,
+					AppVersion: release.Chart.AppVersion(),
+				},
+			}
+
+			metaYamlBytes, err := yaml.Marshal(meta)
+			if err != nil {
+				logger.Error().Err(err).Msg("Error marshalling helm release metadata")
+			} else {
+				utils.WriteToFile("data/helm/metadata.yaml", string(metaYamlBytes))
+			}
+		}
+
+		releaseValues, err := client.GetReleaseValues(releaseName, true)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Error getting values for helm release %s", releaseName)
+		} else {
+			jsonString, err := yaml.Marshal(releaseValues)
+			if err != nil {
+				logger.Fatal().Err(err).Msg("Error marshalling helm release values")
+			} else {
+				utils.WriteToFile("data/helm/values.yaml", string(jsonString))
+			}
+		}
+	}
+}
+
 type ResourceDumpOptions struct {
 	IncludeByName func(string) bool
 }
 
 func dumpResources(dynamicClient dynamic.Interface, gvr schema.GroupVersionResource, namespace string, opts ResourceDumpOptions) {
-	logger := utils.GetLogger().With().Str("resource", gvr.String()).Logger()
+	logger := utils.GetLogger().With().Str("resource", gvr.String()).Str("namespace", namespace).Logger()
 
 	resourceClient := dynamicClient.Resource(gvr).Namespace(namespace)
 	list, err := resourceClient.List(context.TODO(), metav1.ListOptions{})
