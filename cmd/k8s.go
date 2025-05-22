@@ -14,13 +14,15 @@ import (
 	"io"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+	"path/filepath"
+	"sigs.k8s.io/yaml"
 	"strconv"
 	"strings"
-
-	"path/filepath"
 )
 
 // k8sCmd represents the k8s command
@@ -68,52 +70,46 @@ func init() {
 
 func runDumpCommand(kubeconfig string, namespace string, helmDeployment string) {
 	logger := utils.GetLogger()
-
-	logger.Info().Msg("Running k8s dump command")
-	logger.Info().Msg("kubeconfig is : " + kubeconfig)
-	logger.Info().Msg("namespace is : " + namespace)
-	logger.Info().Msg("helmDeployment is : " + helmDeployment)
-
-	clientset := getClientSet(kubeconfig)
 	helmClient, err := helmclient.New(&helmclient.Options{
 		Namespace: namespace,
 	})
 	if err != nil {
-		logger.Error().Msg("Error while creating helm client: " + err.Error())
-	}
-	helmRelease, err := helmClient.GetRelease(helmDeployment)
-	if err != nil {
-		logger.Error().Msg("Error while fetching helm release: " + err.Error())
-	}
-	utils.WriteToFile("data/helm/helm-release-manifest.yaml", helmRelease.Manifest)
+		logger.Error().Err(err).Msg("Error creating helm client")
+	} else {
+		helmRelease, err := helmClient.GetRelease(helmDeployment)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Error fetching helm release %s", helmDeployment)
+		} else {
+			utils.WriteToFile("data/helm/manifest.yaml", helmRelease.Manifest)
+		}
 
-	releaseValues, err := helmClient.GetReleaseValues(helmDeployment, true)
-	jsonString, err := json.Marshal(releaseValues)
-	if err != nil {
-		logger.Error().Msg("Error while marshalling helm release values: " + err.Error())
+		releaseValues, err := helmClient.GetReleaseValues(helmDeployment, true)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Error getting values for helm release %s", helmDeployment)
+		} else {
+			jsonString, err := json.Marshal(releaseValues)
+			if err != nil {
+				logger.Fatal().Err(err).Msg("Error while marshalling helm release values")
+			} else {
+				utils.WriteToFile("data/helm/values.json", string(jsonString))
+			}
+		}
 	}
-	utils.WriteToFile("data/helm/values.json", string(jsonString))
 
-	dumpDeployments(*clientset, namespace)
-	dumpPods(*clientset, namespace)
-	dumpConfigMaps(*clientset, namespace)
-	dumpServices(*clientset, namespace)
-	dumpSecrets(*clientset, namespace)
+	_, dynamicClient := getClients(kubeconfig)
+	dumpDeployments(dynamicClient, namespace)
+	dumpPods(dynamicClient, namespace)
+	dumpConfigMaps(dynamicClient, namespace)
+	dumpServices(dynamicClient, namespace)
+	dumpSecrets(dynamicClient, namespace)
 }
 
 func runLogsCommand(kubeconfig string, namespace string, timesinceseconds int64) {
-	logger := utils.GetLogger()
-
-	logger.Info().Msg("Running k8s dump command")
-	logger.Info().Msg("kubeconfig is : " + kubeconfig)
-	logger.Info().Msg("namespace is : " + namespace)
-
-	clientset := getClientSet(kubeconfig)
-
+	clientset, _ := getClients(kubeconfig)
 	dumpPodLogs(*clientset, namespace, timesinceseconds)
 }
 
-func getClientSet(kubeconfig string) *kubernetes.Clientset {
+func getClients(kubeconfig string) (*kubernetes.Clientset, *dynamic.DynamicClient) {
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		panic(err)
@@ -122,51 +118,69 @@ func getClientSet(kubeconfig string) *kubernetes.Clientset {
 	if err != nil {
 		panic(err)
 	}
-	return clientset
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		panic(err)
+	}
+	return clientset, dynamicClient
 }
 
-func dumpDeployments(clientset kubernetes.Clientset, namespace string) {
-	logger := utils.GetLogger()
-	deploymentsClient := clientset.AppsV1().Deployments(namespace)
-	logger.Info().Msg("Listing deployments in namespace " + namespace)
-	list, err := deploymentsClient.List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		logger.Error().Msg("Error while listing deployments: " + err.Error())
-	}
-	for _, d := range list.Items {
-		fmt.Printf(" * %s (%d replicas)\n", d.Name, *d.Spec.Replicas)
-		desriber := utils.DeploymentDescriber{
-			Client: &clientset,
-		}
-		res, err := desriber.Describe(namespace, d.Name, utils.DescriberSettings{ChunkSize: 128})
-		if err != nil {
-			logger.Error().Msg("Error while describing deployment: " + err.Error())
-		}
+type ResourceDumpOptions struct {
+	IncludeByName func(string) bool
+}
 
-		fmt.Printf(" * DESCRIBE Deployment:: %s \n\n\n\n ", res)
-		utils.WriteToFile("data/deployments/"+d.Name+".yaml", res)
+func dumpResources(dynamicClient dynamic.Interface, gvr schema.GroupVersionResource, namespace string, opts ResourceDumpOptions) {
+	logger := utils.GetLogger().With().Str("resource", gvr.String()).Logger()
+
+	resourceClient := dynamicClient.Resource(gvr).Namespace(namespace)
+	list, err := resourceClient.List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		logger.Error().Err(err).Msgf("Error listing %s resources", gvr.String())
+		return
+	}
+
+	for _, item := range list.Items {
+		name := item.GetName()
+		if opts.IncludeByName == nil || opts.IncludeByName(name) {
+			fmt.Print("----------\n")
+			fmt.Printf("%s: %s\n", gvr.String(), name)
+
+			obj, err := resourceClient.Get(context.TODO(), name, metav1.GetOptions{})
+			if err != nil {
+				logger.Error().Err(err).Msgf("Error getting %s %s", gvr.String(), name)
+				continue
+			}
+
+			yamlBytes, err := yaml.Marshal(obj)
+			if err != nil {
+				logger.Error().Err(err).Msgf("Error marshalling %s %s to YAML", gvr.String(), name)
+				continue
+			}
+
+			fmt.Printf("%s\n", string(yamlBytes))
+
+			filePath := filepath.Join("data", gvr.Resource, fmt.Sprintf("%s.yaml", name))
+			utils.WriteToFile(filePath, string(yamlBytes))
+		}
 	}
 }
 
-func dumpPods(clientset kubernetes.Clientset, namespace string) {
-	logger := utils.GetLogger()
-	podsClient := clientset.CoreV1().Pods(namespace)
-	pods, err := podsClient.List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		logger.Error().Msg("Error while listing pods: " + err.Error())
+func dumpDeployments(dynamicClient dynamic.Interface, namespace string) {
+	gvr := schema.GroupVersionResource{
+		Group:    "apps",
+		Version:  "v1",
+		Resource: "deployments",
 	}
-	for _, d := range pods.Items {
-		fmt.Printf(" * %s \n", d.Name)
-		fmt.Printf(" * NAME:: %s \n\n\n\n ", d.Name)
-		describer := utils.PodDescriber{&clientset}
-		res, err := describer.Describe(namespace, d.Name, utils.DescriberSettings{ShowEvents: true})
-		if err != nil {
-			logger.Error().Msg("Error while describing pod: " + err.Error())
-		}
+	dumpResources(dynamicClient, gvr, namespace, ResourceDumpOptions{})
+}
 
-		fmt.Printf(" * DESCRIBE Pod:: %s \n\n\n\n ", res)
-		utils.WriteToFile("data/pods/"+d.Name+".yaml", res)
+func dumpPods(dynamicClient dynamic.Interface, namespace string) {
+	gvr := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "pods",
 	}
+	dumpResources(dynamicClient, gvr, namespace, ResourceDumpOptions{})
 }
 
 func dumpPodLogs(clientset kubernetes.Clientset, namespace string, timesinceseconds int64) {
@@ -174,81 +188,16 @@ func dumpPodLogs(clientset kubernetes.Clientset, namespace string, timesinceseco
 	podsClient := clientset.CoreV1().Pods(namespace)
 	pods, err := podsClient.List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		logger.Error().Msg("Error while listing pods: " + err.Error())
+		logger.Error().Err(err).Msg("Error listing pods")
 	}
-	for _, d := range pods.Items {
-		logger.Info().Msg("Getting logs for pod: " + d.Name + " for seconds: " + strconv.FormatInt(timesinceseconds, 10))
-		utils.WriteToFile("data/logs/"+d.Name+".log", getPodLogs(clientset, d, timesinceseconds))
-	}
-}
-
-func dumpConfigMaps(clientset kubernetes.Clientset, namespace string) {
-	logger := utils.GetLogger()
-	configMapsClient := clientset.CoreV1().ConfigMaps(namespace)
-	configMaps, err := configMapsClient.List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		logger.Error().Msg("Error while listing configmaps: " + err.Error())
-	}
-	for _, d := range configMaps.Items {
-		fmt.Printf(" * %s \n", d.Name)
-		fmt.Printf(" * NAME:: %s \n\n\n\n ", d.Name)
-		describer := utils.ConfigMapDescriber{&clientset}
-		res, err := describer.Describe(namespace, d.Name, utils.DescriberSettings{ChunkSize: 128})
-		if err != nil {
-			logger.Error().Msg("Error while describing configmap: " + err.Error())
-		}
-
-		fmt.Printf(" * DESCRIBE ConfigMap:: %s \n\n\n\n ", res)
-		utils.WriteToFile("data/configmaps/"+d.Name+".yaml", res)
-	}
-}
-
-func dumpServices(clientset kubernetes.Clientset, namespace string) {
-	logger := utils.GetLogger()
-	servicesClient := clientset.CoreV1().Services(namespace)
-	services, err := servicesClient.List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		logger.Error().Msg("Error while listing services: " + err.Error())
-	}
-	for _, d := range services.Items {
-		fmt.Printf(" * %s \n", d.Name)
-		fmt.Printf(" * NAME:: %s \n\n\n\n ", d.Name)
-		describer := utils.ServiceDescriber{&clientset}
-		res, err := describer.Describe(namespace, d.Name, utils.DescriberSettings{ChunkSize: 128})
-		if err != nil {
-			logger.Error().Msg("Error while describing service: " + err.Error())
-		}
-
-		fmt.Printf(" * DESCRIBE Service:: %s \n\n\n\n ", res)
-		utils.WriteToFile("data/services/"+d.Name+".yaml", res)
-	}
-}
-
-func dumpSecrets(clientset kubernetes.Clientset, namespace string) {
-	logger := utils.GetLogger()
-	secretsClient := clientset.CoreV1().Secrets(namespace)
-	secrets, err := secretsClient.List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		logger.Error().Msg("Error while listing secrets: " + err.Error())
-	}
-	for _, d := range secrets.Items {
-
-		if !strings.HasPrefix(d.Name, "sh.helm") {
-			fmt.Printf(" * %s \n", d.Name)
-			fmt.Printf(" * NAME:: %s \n\n\n\n ", d.Name)
-			describer := utils.SecretDescriber{&clientset}
-			res, err := describer.Describe(namespace, d.Name, utils.DescriberSettings{ChunkSize: 128})
-			if err != nil {
-				logger.Error().Msg("Error while describing secret: " + err.Error())
-			}
-
-			fmt.Printf(" * DESCRIBE Secret:: %s \n\n\n\n ", res)
-			utils.WriteToFile("data/secrets/"+d.Name+".yaml", res)
-		}
+	for _, p := range pods.Items {
+		logger.Info().Msgf("Getting logs for pod %s for seconds %s", p.Name, strconv.FormatInt(timesinceseconds, 10))
+		utils.WriteToFile("data/logs/"+p.Name+".log", getPodLogs(clientset, p, timesinceseconds))
 	}
 }
 
 func getPodLogs(clientSet kubernetes.Clientset, pod apiv1.Pod, timesinceseconds int64) string {
+	logger := utils.GetLogger().With().Str("pod", pod.Name).Logger()
 	podLogOpts := apiv1.PodLogOptions{
 		SinceSeconds: &timesinceseconds,
 	}
@@ -257,7 +206,11 @@ func getPodLogs(clientSet kubernetes.Clientset, pod apiv1.Pod, timesinceseconds 
 	if err != nil {
 		return "error in opening stream"
 	}
-	defer podLogs.Close()
+	defer func() {
+		if err := podLogs.Close(); err != nil {
+			logger.Error().Err(err).Msgf("Error closing pod logs stream for %s", pod.Name)
+		}
+	}()
 
 	buf := new(bytes.Buffer)
 	_, err = io.Copy(buf, podLogs)
@@ -267,4 +220,38 @@ func getPodLogs(clientSet kubernetes.Clientset, pod apiv1.Pod, timesinceseconds 
 	str := buf.String()
 
 	return str
+}
+
+func dumpConfigMaps(dynamicClient dynamic.Interface, namespace string) {
+	gvr := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "configmaps",
+	}
+	dumpResources(dynamicClient, gvr, namespace, ResourceDumpOptions{})
+}
+
+func dumpServices(dynamicClient dynamic.Interface, namespace string) {
+	gvr := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "services",
+	}
+	dumpResources(dynamicClient, gvr, namespace, ResourceDumpOptions{})
+}
+
+func dumpSecrets(dynamicClient dynamic.Interface, namespace string) {
+	gvr := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "secrets",
+	}
+
+	opts := ResourceDumpOptions{
+		IncludeByName: func(name string) bool {
+			return !strings.HasPrefix(name, "sh.helm")
+		},
+	}
+
+	dumpResources(dynamicClient, gvr, namespace, opts)
 }
