@@ -15,3 +15,7 @@ lint: ## Run linting
 
 brain-freeze: go.sum go.mod main.go cmd ## Build brain-freeze
 	go build
+
+clean:
+	rm -rf dist data brain-freeze
+.PHONY: clean
