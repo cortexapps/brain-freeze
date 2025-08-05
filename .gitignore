@@ -1,3 +1,5 @@
 .idea
 brain-freeze
 data
+# Added by goreleaser init:
+dist/
