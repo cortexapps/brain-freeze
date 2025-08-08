@@ -25,7 +25,10 @@ The CLI comes with helpers built-in to aid through the usage. Can run any comman
 brain-freeze --help
 ```
 
-## Commands
+Generally you will want to run:
 
-- `brain-freeze k8s ...` - Commands to interact with Cortex K8s helm deployment.
-- `brain-freeze backend ....` - Commands to interact with Cortex backend.
+- `brain-freeze k8s dump`: Dumps installation information
+- `brain-freeze k8s logs`: Dumps pod logs
+
+Both of these will dump to the `data/` directory in the current
+working directory, which you can tar or zip and send to Cortex support.
